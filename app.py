@@ -10,7 +10,7 @@ def hello_world():
     """
     シンプルな「Hello World!」メッセージを返します。
     """
-    return '<h1>Hello World! App Service Test Successful.</h1>'
+    return '<h1>Hello World!</h1>'
 
 # 本番環境では使用されないが、Gunicorn/WSGIサーバーがこの 'app' インスタンスを見つけます。
 if __name__ == '__main__':
