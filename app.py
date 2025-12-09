@@ -50,7 +50,7 @@ def display_users():
     # Azure App Serviceの環境変数から接続文字列を取得
     # 'AzureSqlDb' はステップ2で設定した接続文字列名に依存します
     # Pythonでは、接続文字列の値は 'CUSTOMCONNSTR_AzureSqlDb' というキーで取得されます。
-    conn_str = os.environ.get('CUSTOMCONNSTR_AzureSqlDb')
+    conn_str = os.environ.get('SQLAZURE_CONNECTIONSTRING_AzureSqlDb')
 
     if not conn_str:
         return "Error: SQL Connection string 'AzureSqlDb' not found in Web App settings.", 500
