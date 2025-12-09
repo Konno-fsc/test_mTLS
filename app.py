@@ -1,6 +1,6 @@
 from flask import Flask, render_template_string
 import os
-import pymssql # 💡 1. データベース接続を pymssql に変更
+import pymssql #1. データベース接続を pymssql に変更
 
 app = Flask(__name__)
 
@@ -75,10 +75,10 @@ def display_users():
     data = []
     error = None
     
-    # 💡 2. クライアント証明書の発行者情報を取得
+    #2. クライアント証明書の発行者情報を取得
     cert_issuer = os.environ.get('WEBSITES_CLIENT_CERT_ISSUER', '証明書が提供されていません/取得失敗')
 
-    # 💡 2. 確定した環境変数名 'AzureSqlDb' から接続文字列を取得
+    #2. 確定した環境変数名 'AzureSqlDb' から接続文字列を取得
     conn_str = os.environ.get('AzureSqlDb')
 
     if not conn_str:
@@ -86,10 +86,10 @@ def display_users():
         return "Error: SQL Connection string 'AzureSqlDb' not found in Web App settings.", 500
 
     try:
-        # 💡 接続文字列から接続パラメータを解析
+        #接続文字列から接続パラメータを解析
         params = parse_conn_str(conn_str)
 
-        # 💡 pymssql.connect で SQL Databaseに接続 (ODBCドライバ不要)
+        #pymssql.connect で SQL Databaseに接続 (ODBCドライバ不要)
         conn = pymssql.connect(
             server=params['server'], 
             user=params['user'], 
