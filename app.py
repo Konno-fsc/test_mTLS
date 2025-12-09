@@ -1,11 +1,11 @@
-# app.py
+# app.py (pymssql を使用するように修正)
 from flask import Flask, render_template_string
 import os
-import pyodbc
+import pymssql # 💡 pyodbc ではなく pymssql をインポート
 
 app = Flask(__name__)
 
-# テンプレートの定義 (HTMLをPythonコード内に直接記述)
+# テンプレートの定義 (HTMLは変更なし)
 HTML_TEMPLATE = """
 <!doctype html>
 <title>User Data List</title>
@@ -41,33 +41,63 @@ HTML_TEMPLATE = """
 </table>
 """
 
+# --- 接続文字列からパラメータを抽出するヘルパー関数 ---
+def parse_conn_str(conn_str):
+    """ODBC接続文字列からpymssqlに必要なパラメータを抽出する"""
+    params = {}
+    for part in conn_str.split(';'):
+        if '=' in part:
+            key, value = part.split('=', 1)
+            params[key.strip().lower()] = value.strip()
+    
+    # pymssql形式に合わせてパラメータを抽出
+    server = params.get('server', '').replace('tcp:', '').split(',')[0]
+    port = params.get('server', '').split(',')[1] if ',' in params.get('server', '') else 1433
+    
+    return {
+        'server': server,
+        'database': params.get('database'),
+        'user': params.get('uid'),
+        'password': params.get('pwd'),
+        'port': port # pymssql はデフォルトで1433を使うため、ここでは使用しないが抽出
+    }
+
+# ----------------------------------------------------
+
 @app.route('/')
 def display_users():
     conn = None
     data = []
     error = None
 
-    # Azure App Serviceの環境変数から接続文字列を取得
-    # 'AzureSqlDb' はステップ2で設定した接続文字列名に依存します
-    # Pythonでは、接続文字列の値は 'CUSTOMCONNSTR_AzureSqlDb' というキーで取得されます。
+    # 💡 確定した環境変数名 'AzureSqlDb' から接続文字列を取得
     conn_str = os.environ.get('AzureSqlDb')
 
     if not conn_str:
         return "Error: SQL Connection string 'AzureSqlDb' not found in Web App settings.", 500
 
     try:
-        # SQL Databaseに接続
-        conn = pyodbc.connect(conn_str)
+        # 💡 接続文字列から接続パラメータを解析
+        params = parse_conn_str(conn_str)
+
+        # 💡 pymssql.connect で SQL Databaseに接続 (ODBCドライバ不要)
+        conn = pymssql.connect(
+            server=params['server'], 
+            user=params['user'], 
+            password=params['password'], 
+            database=params['database']
+        )
         cursor = conn.cursor()
 
         # user_dataテーブルから全データを取得
         cursor.execute("SELECT ID, Name, gender, age, attribute FROM user_data")
-        data = cursor.fetchall()
+        
+        # pymssql は row[0] ではなく tuple のリストを返すため、fetchall() はそのまま使用可能
+        data = cursor.fetchall() 
 
-    except pyodbc.Error as ex:
+    except Exception as ex: # 💡 pyodbc.Error ではなく、一般的な Exception でキャッチ
         # 接続またはクエリ実行エラーが発生した場合
-        sqlstate = ex.args[0]
-        error = f"Database Error: {sqlstate}. Check firewall/connection string."
+        error = f"Database Error (pymssql): {ex}. Check authentication/connection parameters."
         print(error) # デバッグのためにログに出力
 
     finally:
@@ -81,6 +111,4 @@ def display_users():
     return render_template_string(HTML_TEMPLATE, data=data)
 
 if __name__ == '__main__':
-    # ローカル実行時には環境変数に接続文字列を設定する必要があります
-    # 例: os.environ['CUSTOMCONNSTR_AzureSqlDb'] = '...' 
     app.run(debug=True)
