@@ -1,5 +1,3 @@
-# app.py (証明書デコードロジック追加版)
-
 from flask import Flask, render_template_string, request
 import os
 import pymssql
@@ -9,22 +7,61 @@ from cryptography.hazmat.backends import default_backend
 
 app = Flask(__name__)
 
-# テンプレートの定義 (HTMLは変更なし)
+# テンプレートの定義 (HTMLに証明書の詳細属性を追加)
 HTML_TEMPLATE = """
 <!doctype html>
 <title>User Data List</title>
 <h1>User Data from Azure SQL Database</h1>
+<h2>🔒 Client Certificate Attributes</h2>
 <p>
-    <strong>Client Certificate Issuer (発行者):</strong> {{ cert_issuer_dn }}
-    <br>
     <strong>X-ARR-ClientCert (デバッグ):</strong> {{ arr_cert }}
+    <br>
+    <strong>Issuer (発行者):</strong> {{ cert_attrs.issuer }}
+    <br>
+    <strong>Subject (サブジェクト):</strong> {{ cert_attrs.subject }}
+    <br>
+    <strong>Serial Number (シリアル番号):</strong> {{ cert_attrs.serial_number }}
+    <br>
+    <strong>Valid Until (有効期限):</strong> {{ cert_attrs.not_valid_after }}
+    <br>
+    <strong>Verification Status (検証ステータス):</strong> {{ cert_attrs.verified }}
 </p>
+
+---
+
+<h2>💾 Database Contents</h2>
 <style>
-# ... (省略) ...
+    table, th, td {
+        border: 1px solid black;
+        border-collapse: collapse;
+        padding: 8px;
+        text-align: left;
+    }
+    th {
+        background-color: #f2f2f2;
+    }
+</style>
+<table>
+    <tr>
+        <th>ID</th>
+        <th>Name</th>
+        <th>Gender</th>
+        <th>Age</th>
+        <th>Attribute</th>
+    </tr>
+    {% for row in data %}
+    <tr>
+        <td>{{ row[0] }}</td>
+        <td>{{ row[1] }}</td>
+        <td>{{ row[2] }}</td>
+        <td>{{ row[3] }}</td>
+        <td>{{ row[4] }}</td>
+    </tr>
+    {% endfor %}
+</table>
 """
 
-# --- 接続文字列からパラメータを抽出するヘルパー関数 (省略) ---
-# ... (parse_conn_str 関数は変更なし) ...
+# --- 接続文字列からパラメータを抽出するヘルパー関数 ---
 def parse_conn_str(conn_str):
     """ODBC接続文字列からpymssqlに必要なパラメータを抽出する"""
     params = {}
@@ -46,65 +83,79 @@ def parse_conn_str(conn_str):
     }
 # ----------------------------------------------------
 
+# --- 証明書解析ヘルパー関数 ---
+def decode_client_cert(arr_cert_b64, request_headers):
+    """X-ARR-ClientCert をデコードし、証明書属性を抽出する"""
+    attrs = {
+        'issuer': 'N/A (証明書未提示)',
+        'subject': 'N/A',
+        'serial_number': 'N/A',
+        'not_valid_after': 'N/A',
+        'verified': request_headers.get('X-MS-CLIENT-CERT-VERIFIED', 'N/A (ヘッダーなし)')
+    }
+    
+    if arr_cert_b64:
+        # X-MS-CLIENT-CERT-VERIFIED ヘッダーが取得できた場合はその値を優先
+        if attrs['verified'] == 'N/A (ヘッダーなし)':
+             attrs['verified'] = 'Verification Status N/A'
+             
+        try:
+            # 1. Base64文字列をデコード
+            cert_bytes = base64.b64decode(arr_cert_b64)
+            
+            # 2. X.509証明書オブジェクトとしてロード
+            cert = x509.load_der_x509_certificate(cert_bytes, default_backend())
+            
+            # 3. 各属性を抽出
+            attrs['issuer'] = cert.issuer.rfc4514_string()
+            attrs['subject'] = cert.subject.rfc4514_string()
+            attrs['serial_number'] = hex(cert.serial_number)
+            attrs['not_valid_after'] = cert.not_valid_after.strftime('%Y-%m-%d %H:%M:%S UTC')
+            
+        except Exception as e:
+            attrs['issuer'] = f"デコードエラー: {e}"
+            attrs['verified'] = 'FAILED (デコードエラー)'
+
+    return attrs
+# -----------------------------
+
 @app.route('/')
 def display_users():
     conn = None
     data = []
     error = None
 
-    # App Serviceが生成する発行者ヘッダーをまず取得
-    cert_issuer_dn = request.headers.get('X-MS-CLIENT-CERT-ISSUER')
+    # 💡 X-ARR-ClientCert ヘッダーを取得
     arr_cert = request.headers.get('X-ARR-ClientCert')
 
-    # 手動デコード用の発行者変数
-    decoded_issuer = "証明書情報なし"
-
-    if arr_cert:
-        # 💡 Base64から証明書オブジェクトへの変換と発行者抽出 💡
-        try:
-            # 1. Base64文字列をデコード
-            cert_bytes = base64.b64decode(arr_cert)
-            
-            # 2. X.509証明書オブジェクトとしてロード
-            cert = x509.load_der_x509_certificate(cert_bytes, default_backend())
-            
-            # 3. 発行者DN (Distinguished Name) を抽出
-            decoded_issuer = cert.issuer.rfc4514_string()
-
-            # 💡 X-MS-CLIENT-CERT-ISSUER が見つからない場合は、デコードした値を使用
-            if not cert_issuer_dn:
-                cert_issuer_dn = f"手動デコード: {decoded_issuer}"
-                
-        except Exception as e:
-            decoded_issuer = f"デコードエラー: {e}"
-            if not cert_issuer_dn:
-                 cert_issuer_dn = f"検証失敗: {e}"
-
-    # 表示が長くなりすぎないよう、Base64文字列の最初の50文字のみ表示
-    arr_cert_display = arr_cert[:50] + "..." if arr_cert else "Not Found"
+    # 💡 証明書解析ヘルパー関数を使用して属性を取得
+    cert_attrs = decode_client_cert(arr_cert, request.headers)
     
-    if not cert_issuer_dn or cert_issuer_dn.startswith("N/A"):
-        # 元々 N/A だった場合に、手動デコードの結果を表示する
-        if decoded_issuer not in ["証明書情報なし", "デコードエラー"]:
-             cert_issuer_dn = f"手動デコード: {decoded_issuer}"
-        else:
-             cert_issuer_dn = f"N/A ({decoded_issuer})"
+    # Base64文字列の表示調整
+    arr_cert_display = arr_cert[:50] + "..." if arr_cert else "Not Found"
 
-
-    # 確定した環境変数名 'AzureSqlDb' から接続文字列を取得 (以下、DB接続処理は省略)
-    # ...
+    # --- データベース接続処理 ---
+    
+    # 確定した環境変数名 'AzureSqlDb' から接続文字列を取得
     conn_str = os.environ.get('AzureSqlDb')
+
     if not conn_str:
         return "Error: SQL Connection string 'AzureSqlDb' not found in Web App settings.", 500
 
     try:
         # 接続文字列から接続パラメータを解析
         params = parse_conn_str(conn_str)
+
+        # pymssql.connect で SQL Databaseに接続
         conn = pymssql.connect(
-            server=params['server'], user=params['user'], 
-            password=params['password'], database=params['database']
+            server=params['server'], 
+            user=params['user'], 
+            password=params['password'], 
+            database=params['database']
         )
         cursor = conn.cursor()
+
+        # user_dataテーブルから全データを取得
         cursor.execute("SELECT ID, Name, gender, age, attribute FROM user_data")
         data = cursor.fetchall() 
 
@@ -122,10 +173,8 @@ def display_users():
     # テンプレートにデータを渡してレンダリング
     return render_template_string(HTML_TEMPLATE, 
                                   data=data, 
-                                  cert_issuer_dn=cert_issuer_dn,
-                                  arr_cert=arr_cert_display)
+                                  arr_cert=arr_cert_display,
+                                  cert_attrs=cert_attrs)
 
 if __name__ == '__main__':
-    # 環境変数設定がない場合のためのダミー設定 (開発環境でのみ使用)
-    # os.environ['AzureSqlDb'] = "Driver={ODBC Driver 17 for SQL Server};Server=tcp:yourserver.database.windows.net,1433;Database=yourdb;Uid=youruser;Pwd=yourpassword;"
     app.run(debug=True)
